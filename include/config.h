@@ -48,9 +48,11 @@ typedef uint32_t scaled_t;
 #define RAIN24_WINDOW_MS 86400000UL // 24 ч в мс
 
 // ============ BLE Advertising ============
-// Non-connectable, только рассылка. Интервал 5 сек = 8000 * 0.625 мс
-#define ADV_INTERVAL_625US 8000
-#define ADV_TX_POWER_DBM 0  // потом можно -12 для экономии
+// Non-connectable, только рассылка. Интервал 10 сек = 16000 * 0.625 мс
+// (реже — меньше средний ток; потеря одного пакета не страшна)
+#define ADV_INTERVAL_625US 16000
+#define ADV_PERIOD_MS 10000UL
+#define ADV_TX_POWER_DBM 8  // максимум чипа: дальность важнее единиц мкА среднего тока TX
 #define ADV_NAME "TC-01"   // короткое имя, чтобы найти в nRF Connect
 #define COMPANY_ID 0xFFFF  // тестовый; свой получить позже
 #define MFG_MAGIC 0x5443   // "TC" tick-counter
@@ -69,7 +71,7 @@ typedef uint32_t scaled_t;
 #define BAT_URGENT_MV 2200 // срочный save
 #define BAT_HYST_MV 50
 #define BAT_LOW_CONSECUTIVE 3  // севшим считаем после 3 подряд ниже порога
-#define BAT_MEASURE_EVERY_ADV 12 // мерить VDD раз в 12 adv = раз в минуту
+#define BAT_MEASURE_EVERY_ADV 12 // мерить VDD раз в 12 adv = раз в 2 минуты
 
 // ============ Светодиод ============
 // По документации этого класса плат (SuperMini/nRF Pro Micro, wiki joric/nrfmicro):

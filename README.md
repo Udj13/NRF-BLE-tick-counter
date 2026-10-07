@@ -24,7 +24,7 @@ Firmware: PlatformIO + Arduino (Adafruit nRF52 core, target
   `rain_mm = raw * 865 * 1000 / (100 * 8220)`, integer math only (uint64).
   Tune the set screw for exactly 8.22 ml/tip to get 1.00 mm/tip;
   re-calibrate with a syringe by editing `TIP_VOLUME_ML_*`.
-- BLE advertising every 5 s: flags + manufacturer data
+- BLE advertising every 10 s: flags + manufacturer data
   (company `0xFFFF`, magic `0x5443`, rain total u32 LE in **whole mm**,
   battery mV u16 LE, **last-24h rain u8**, flags) + name `"TC-01"`.
   The 24 h window is a 256-stamp RAM ring (reboot resets the window only;
@@ -76,7 +76,8 @@ BAT / B+ / B- pads — leave EMPTY
 ## BLE packet (advertising)
 
 Type: **non-connectable, non-scannable** (`ADV_NONCONN_IND`) — broadcast only,
-cannot connect. Interval **5 s** (`8000 × 0.625 ms`), Tx **0 dBm**,
+cannot connect. Interval **10 s** (`16000 × 0.625 ms`), Tx **+8 dBm** (chip max,
+range over battery: TX is ~2 ms per interval),
 name **`TC-01`**. 25 of 31 bytes used.
 
 AD structures as seen by a scanner:
@@ -189,7 +190,7 @@ int tc_parse_adv(const uint8_t *adv, uint8_t adv_len, tc_data_t *out)
 | `TIP_VOLUME_ML_NUM/DEN` | tip volume, ml | 865/100 |
 | `SAVE_STEP_UNITS` | flash save every N mm | 1 |
 | `TIP_RING_SIZE` | 24 h window ring size (stamps) | 256 |
-| `ADV_TX_POWER_DBM` | BLE TX power | 0 |
+| `ADV_TX_POWER_DBM` | BLE TX power | 8 |
 | `BAT_WARN_MV / BAT_URGENT_MV` | battery thresholds (mV, rail) | 2400/2200 |
 | `PIN_LED_ADV / PIN_LED_TICK` | red LED (P0.15) | 24/24 |
 
@@ -214,9 +215,9 @@ this bootloader — UF2 only. Factory firmware is backed up in
 
 ## Power budget (estimate)
 
-Sleep ~4 µA (System ON + DC/DC) + `DRV5032` ~1 µA + one adv/5 s (~10 mA × 3 ms
-→ ~6 µA average) ≈ 12–15 µA total. A 3500 mAh L91 pair is limited by
-self-discharge, not by the load: 2–3+ years easily. VDD sampling (1/min)
+Sleep ~4 µA (System ON + DC/DC) + `DRV5032` ~1 µA + one adv/10 s (~14 mA × 2 ms
+→ ~3 µA average) ≈ 10 µA total. A 3500 mAh L91 pair is limited by
+self-discharge, not by the load: 2–3+ years easily. VDD sampling (1/2 min)
 and flash saves (1/mm + daily) average to nanoamps.
 
 ## Working with an AI agent

@@ -48,7 +48,7 @@ static uint16_t readVddMv() {
   return (uint16_t)mv;
 }
 
-// ---------- Flash persistence (двойной слот не нужен на LittleFS: пишем атомарно через tmp+rename) ----------
+// ---------- Flash persistence (пишем напрямую, файл маленький; битый файл отсекается CRC при загрузке) ----------
 static bool persistLoad(raw_t &rawOut, scaled_t &scaledOut) {
   File f(InternalFS);
   if (!InternalFS.begin()) return false;
@@ -292,8 +292,8 @@ void loop() {
   }
 #endif
 
-  // 1. Adv раз в 5 сек (по таймеру, не чаще)
-  if (now - g_lastAdvMs >= 5000UL) {
+  // 1. Adv раз в ADV_PERIOD_MS (по таймеру, не чаще)
+  if (now - g_lastAdvMs >= ADV_PERIOD_MS) {
     g_advCount++;
     batteryPoll(false);
     advUpdate();
