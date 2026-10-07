@@ -141,7 +141,9 @@ static void advUpdate() {
     Serial.print(" batt=");
     Serial.print(g_battMv);
     Serial.print("mV flags=0x");
-    Serial.println(g_flags, HEX);
+    Serial.print(g_flags, HEX);
+    Serial.print(" adv_running=");
+    Serial.println(Bluefruit.Advertising.isRunning() ? "YES" : "NO");
   }
 }
 
@@ -205,10 +207,24 @@ void setup() {
   // DC/DC для экономии
   NRF_POWER->DCDCEN = 1;
 
-  Bluefruit.begin(0, 0); // peripheral=0_conns? нам вообще не нужны соединения: 0,0
+  // ВАЖНО: begin(1,0), а не (0,0)! С нулем peripheral-ролей SoftDevice не
+  // конфигурирует CONN_CFG_PERIPHERAL и sd_ble_gap_adv_start молча падает —
+  // advertising не стартует вообще. 1 слот никого не пускает: тип у нас
+  // non-connectable (см. setType ниже), слот просто висит резервом.
+  if (!Bluefruit.begin(1, 0)) {
+    if (Serial) Serial.println("FATAL: Bluefruit.begin failed");
+    while (1) {
+      digitalWrite(PIN_LED_TICK, LED_ON);
+      delay(200);
+      digitalWrite(PIN_LED_TICK, LED_OFF);
+      delay(200);
+    }
+  }
   Bluefruit.autoConnLed(false); // выкл авто-мигание CONN-светодиодом (2 Гц при adv) — рулим сами
   Bluefruit.setTxPower(ADV_TX_POWER_DBM);
   Bluefruit.setName(ADV_NAME);
+  // Наш план: только рассылка, подключиться нельзя
+  Bluefruit.Advertising.setType(BLE_GAP_ADV_TYPE_NONCONNECTABLE_NONSCANNABLE_UNDIRECTED);
 
   g_battMv = readVddMv();
   batteryPoll(true);

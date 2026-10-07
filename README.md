@@ -1,69 +1,112 @@
 # NRF-BLE-tick-counter
 
-Плата: nRF52840, клон Nice!Nano / nRF Pro Micro (Adafruit UF2-bootloader 0.6.0,
-диск `NICENANO`, `Board-ID: nRF52840-nicenano`, SoftDevice S140 6.1.1).
-Прошивка: PlatformIO + Arduino (Adafruit nRF52, таргет `adafruit_feather_nrf52840`) + Bluefruit52.
+Autonomous ultra-low-power rainfall counter for a **tipping-bucket rain meter**
+with a **reed switch or hall sensor**, based on Nordic **nRF52840**.
+Each bucket tip is counted, converted to millimeters of rain using the funnel
+calibration, and broadcast over **BLE advertising** (non-connectable) every
+5 seconds — no connection, no phone app pairing, no gateway handshake needed.
+The count survives power loss (LittleFS) and runs **2–3 years on 2×AA lithium
+batteries**, reporting low-battery state in the same packet.
 
-## Что делает
-- Считает тики: площадка **`017` (= P0.17 = Arduino 29)** на GND,
-  геркон либо холл `DRV5032FADBZR` (open-drain), активный LOW, pull-up, FALLING.
-  Антидребезг: холл 5мс / геркон 40мс (`SENSOR_IS_REED`).
-- Калибровка осадкомера: водосбор 8220 мм² (66.6x129 минус скругления r=20.8),
-  тип 8.65 мл (500 мл / 57.8 типов) => **1 тип ≈ 1 мм** (точно 1.0523).
-  `rain_mm = raw * 865 * 1000 / (100 * 8220)`, только целая арифметика (uint64).
-  Винт под 8.22 мл/тип даст ровно 1.00 мм/тип; шприц-тест — правим `TIP_VOLUME_ML_*`.
-- Non-connectable advertising раз в 5 сек, пакет:
-  `flags + mfg (company 0xFFFF, magic 0x5443, rain u32 LE в сотых мм, batt_mV u16 LE, flags) + name "TC-01"`.
-  Декодер: мм = rain / 100.0. flags: bit0 warn, bit1 urgent, bit2 reed_mode.
-- Память: RAM + LittleFS `/tickcount.bin` (magic+CRC). Сейв каждый 1 мм
-  (`SAVE_STEP_UNITS=1`), раз в 24ч, срочно при `VDD < BAT_URGENT_MV`. Переполнение u32 = wrap.
-- Питание `2xAA L91`: `AA+ -> Шоттки -> 3V3/VCC`, `BAT` в воздухе, `+100мкФ`.
-  Замер только `internal VDD` (SAADC, `raw*3600/4096` при 12 битах),
-  внешний делитель платы не используется. Пороги `warn 2.4В / urgent 2.2В`, 3 подряд.
-- LED: на этом клоне (SuperMini, свежие ревизии) красный/синий перепутаны
-  относительно оригинала: **красный = GPIO P0.15 (Arduino 24)** — вся индикация на нем
-  (тик 30мс, adv 80мс); **синий = STAT зарядника, железо**, мигает без аккумулятора
-  на BAT, софтом не управляется, на батарейках погашен. `autoConnLed(false)`.
+Board: nRF52840 clone of Nice!Nano / nRF Pro Micro (Adafruit UF2 bootloader 0.6.0,
+`NICENANO` drive, `Board-ID: nRF52840-nicenano`, SoftDevice S140 6.1.1).
+Firmware: PlatformIO + Arduino (Adafruit nRF52 core, target
+`adafruit_feather_nrf52840`) + Bluefruit52.
 
-## Подключение
-- Датчик: `SIG -> 017`, `GND -> GND`, холлу еще `VDD -> 3V3`.
-- Батарейки: holder `2xAA` -> диод -> `3V3`, минус -> `GND`, `BAT` свободен.
-  USB втыкать только со снятыми АА (для прошивки/отладки).
-- Холл заказать: `TI DRV5032FADBZR` SOT-23 open-drain, дубль `AH1808-W-7`.
+## Features
 
-## BLE-пакет (advertising)
+- Counts tips on pad **`017`** (= nRF P0.17 = Arduino 29) pulled to GND —
+  reed switch or `DRV5032FADBZR` hall sensor (open-drain), active LOW,
+  internal pull-up, FALLING edge. Debounce: hall 5 ms / reed 40 ms
+  (`SENSOR_IS_REED`).
+- Rain calibration: catchment 8220 mm² (66.6×129 mm minus r=20.8 corner radii),
+  tip volume 8.65 ml (500 ml / 57.8 tips) → **1 tip ≈ 1 mm** (exactly 1.0523).
+  `rain_mm = raw * 865 * 1000 / (100 * 8220)`, integer math only (uint64).
+  Tune the set screw for exactly 8.22 ml/tip to get 1.00 mm/tip;
+  re-calibrate with a syringe by editing `TIP_VOLUME_ML_*`.
+- BLE advertising every 5 s: flags + manufacturer data
+  (company `0xFFFF`, magic `0x5443`, rain u32 LE in **whole mm**,
+  battery mV u16 LE, flags) + name `"TC-01"`. See packet section below.
+- Persistence: RAM + LittleFS `/tickcount.bin` (magic+CRC). Saves every 1 mm
+  (`SAVE_STEP_UNITS=1`), every 24 h heartbeat, urgently on low battery.
+  u32 wrap-around keeps counting.
+- Power: `2×AA Energizer Ultimate Lithium L91`. Internal VDD measurement only
+  (SAADC, `raw*3600/4096` at 12 bit); the on-board divider is unused.
+  Thresholds `warn 2.4 V / urgent 2.2 V`, 3 consecutive readings.
+  See **Battery wiring** below — wrong wiring is a fire hazard.
+- LEDs: on recent SuperMini revisions red/blue are swapped vs the original:
+  **red = GPIO P0.15 (Arduino 24)** carries all indication
+  (tick 30 ms, adv 80 ms); **blue = charger STAT output, hardware**,
+  blinks with no battery on BAT, not software-controllable, off on batteries.
+  `autoConnLed(false)`.
 
-Тип: **non-connectable, non-scannable** (`ADV_NONCONN_IND`) — только рассылка,
-подключиться нельзя. Интервал **5 сек** (`8000 × 0.625 мс`), Tx **0 dBm**.
-Имя устройства: **`TC-01`**. Всего 24 байта из лимита 31.
+## Sensor wiring
 
-Структура пакета (AD structures, как видит сканер):
+- Sensor: `SIG → 017`, `GND → GND`; hall sensor additionally `VDD → 3V3`.
+- Hall sensor to order: `TI DRV5032FADBZR` (SOT-23, open-drain, ~1 µA),
+  second source `AH1808-W-7`. Do NOT use `A3144/US1881/KY-003` modules
+  (3–5 mA continuous — kills the batteries in weeks).
 
-| # | Поле | Байты (hex) | Разбор |
-|---|------|-------------|--------|
-| 1 | Flags | `02 01 06` | len=2, type `0x01`, значение `0x06` = LE General Discoverable, BR/EDR not supported |
-| 2 | Manufacturer Specific | `0C FF FF FF 43 54 01 00 00 00 FD 0C 00` | len=12, type `0xFF`, дальше 11 байт MFG (см. ниже) |
-| 3 | Complete Local Name | `06 09 54 43 2D 30 31` | len=6, type `0x09`, `"TC-01"` в ASCII |
+## Battery wiring (read carefully)
 
-MFG payload, 11 байт (порядок — **little-endian**):
+Power the **2×AA L91** pack **past the charger, straight into the 3.3 V rail**:
 
-| Смещение | Длина | Поле | Формат | Пример |
-|----------|-------|------|--------|--------|
-| 0 | 2 | Company ID | u16 LE, тестовый `0xFFFF` | `FF FF` |
-| 2 | 2 | Magic `"TC"` | `0x5443`, проверка «это наш пакет» | `43 54` |
-| 4 | 4 | Осадки | u32 LE, **целые мм** (округление вниз) | `01 00 00 00` = 1 мм |
-| 8 | 2 | Питание | u16 LE, **милливольты** VDD | `FD 0C` = 3325 мВ |
-| 10 | 1 | Флаги | бит0 — батарея warn, бит1 — батарея urgent, бит2 — режим геркона | `04` = reed_mode |
+```
+AA holder (+) ──[Schottky BAT54/1N5819]──┬──> 3V3 (VCC)
+                                         └──||──> GND (100 µF bulk cap 3V3–GND)
+AA holder (−) ───────────────────────────> GND
+BAT / B+ / B- pads — leave EMPTY
+```
 
-Пример целиком (1 тип после перезагрузки, питание от USB, режим холла):
-`02 01 06 0C FF FF FF 43 54 01 00 00 00 FD 0C 00 06 09 54 43 2D 30 31`
+- **Never connect primary (non-rechargeable) AA cells to `BAT / B+ / B-`.**
+  Those pads feed the LiPo charger (`LTH7R`): with USB plugged it would try
+  to charge your primary lithium cells at 4.2 V — fire hazard.
+  `BAT` is only for a rechargeable 3.7 V LiPo (the board's native scenario,
+  not this project).
+- The diode lets USB and batteries coexist (USB powers the rail while flashing);
+  otherwise disconnect the AAs while USB is plugged in.
+- The 100 µF cap covers TX current peaks (AA cells have high ESR).
+- Fresh cells give ~3.0 V on the rail (after the diode), depleted ~1.8 V;
+  the nRF52840 works down to 1.7 V, and our 2.4/2.2 V thresholds save
+  the counter with margin.
+- Keep batteries and metal away from the ceramic antenna.
 
-Замечания:
-- Company `0xFFFF` — зарезервирован Bluetooth SIG для тестов. Для серии нужен свой Company ID.
-- Счетчик осадков u32 с wrap: после `4294967295` (42 млн мм) переходит в 0 и считает дальше.
-- В `nRF Connect`: устройство `TC-01` -> раскрыть `Manufacturer Data` -> сверять magic `0x5443`.
+## BLE packet (advertising)
 
-Как парсить (Python + bleak — `manufacturer_data` уже без Company ID, ключ словаря и есть `0xFFFF`):
+Type: **non-connectable, non-scannable** (`ADV_NONCONN_IND`) — broadcast only,
+cannot connect. Interval **5 s** (`8000 × 0.625 ms`), Tx **0 dBm**,
+name **`TC-01`**. 24 of 31 bytes used.
+
+AD structures as seen by a scanner:
+
+| # | Field | Bytes (hex) | Meaning |
+|---|-------|-------------|---------|
+| 1 | Flags | `02 01 06` | len=2, type `0x01`, `0x06` = LE General Discoverable, BR/EDR not supported |
+| 2 | Manufacturer Specific | `0C FF FF FF 43 54 01 00 00 00 FD 0C 04` | len=12, type `0xFF`, then 11-byte MFG payload (below) |
+| 3 | Complete Local Name | `06 09 54 43 2D 30 31` | len=6, type `0x09`, `"TC-01"` ASCII |
+
+MFG payload, 11 bytes, **little-endian**:
+
+| Offset | Len | Field | Format | Example |
+|--------|-----|-------|--------|---------|
+| 0 | 2 | Company ID | u16 LE, test value `0xFFFF` | `FF FF` |
+| 2 | 2 | Magic `"TC"` | `0x5443`, "this is our packet" marker | `43 54` |
+| 4 | 4 | Rainfall | u32 LE, **whole mm**, rounds down | `01 00 00 00` = 1 mm |
+| 8 | 2 | Supply | u16 LE, **millivolts** of VDD | `FD 0C` = 3325 mV |
+| 10 | 1 | Flags | bit0 batt warn, bit1 batt urgent, bit2 reed mode | `04` = reed mode |
+
+Full example (1 tip after reboot, USB power, reed mode):
+`02 01 06 0C FF FF FF 43 54 01 00 00 00 FD 0C 04 06 09 54 43 2D 30 31`
+
+Notes:
+- Company `0xFFFF` is reserved by Bluetooth SIG for testing. Get your own
+  Company ID for production.
+- Rain counter max is `0xFFFFFFFF` = 4,294,967,295 mm, then wraps to 0
+  and keeps counting.
+- In `nRF Connect`: find `TC-01` → open `Manufacturer Data` → check magic `0x5443`.
+
+Parser (Python + bleak — `manufacturer_data` arrives without the Company ID;
+the dict key *is* `0xFFFF`):
 
 ```python
 import struct
@@ -84,21 +127,51 @@ def parse_tc(manufacturer_data: dict) -> dict | None:
     }
 ```
 
-## Сборка/прошивка (кнопок нет — только UF2)
+## Configuration (`include/config.h`)
+
+| Define | Meaning | Default |
+|--------|---------|---------|
+| `SENSOR_PIN` | tip input (P0.17 pad `017`) | 29 |
+| `SENSOR_IS_REED` | 1 = reed 40 ms debounce (+flag), 0 = hall 5 ms | 1 |
+| `CATCHMENT_AREA_MM2` | funnel effective area | 8220 |
+| `TIP_VOLUME_ML_NUM/DEN` | tip volume, ml | 865/100 |
+| `SAVE_STEP_UNITS` | flash save every N mm | 1 |
+| `ADV_TX_POWER_DBM` | BLE TX power | 0 |
+| `BAT_WARN_MV / BAT_URGENT_MV` | battery thresholds (mV, rail) | 2400/2200 |
+| `PIN_LED_ADV / PIN_LED_TICK` | red LED (P0.15) | 24/24 |
+
+## Build & flash (no buttons — UF2 only)
+
 ```
 pio run
-python3 <uf2conv> .pio/build/feather_nrf52840/firmware.hex -f 0xADA52840 -o .pio/build/feather_nrf52840/firmware.uf2
+python3 <framework>/tools/uf2conv/uf2conv.py .pio/build/feather_nrf52840/firmware.hex -f 0xADA52840 -o .pio/build/feather_nrf52840/firmware.uf2
 ```
-Дважды коротко замкнуть `RST-GND` -> диск `NICENANO` -> скопировать `firmware.uf2`.
-Серийный `nrfutil` DFU не работает с этим bootloader из приложения — только UF2.
-Заводская прошивка сохранена в `factory-backup-CURRENT.UF2`.
 
-## Проверка
-1. Serial 115200: `== TC-01 boot ==`, `TICK raw=N`, `ADV scaled/batt/flags`, `SAVE`.
-2. `nRF Connect`: устройство `TC-01`, company `0xFFFF`.
-3. Замыкание `017-GND` = тик (красный + `TICK`), 1 тик ≈ +1 мм.
-4. Ребут с выдергиванием питания -> значение восстановилось (после сейва).
+Short `RST` to `GND` twice quickly → `NICENANO` drive appears → copy
+`firmware.uf2` onto it. Serial `nrfutil` DFU from the app does not work with
+this bootloader — UF2 only. Factory firmware is backed up in
+`factory-backup-CURRENT.UF2`.
 
-## Настройки при сборке — `include/config.h`
-`CATCHMENT_AREA_MM2`, `TIP_VOLUME_ML_NUM/DEN`, `SAVE_STEP_UNITS`, `SENSOR_IS_REED`, `ADV_TX_POWER_DBM`,
-`BAT_*`, `PIN_LED_ADV`, `PIN_LED_TICK`.
+## Verification
+
+1. Serial 115200: `== TC-01 boot ==`, `TICK raw=N`, `ADV ... adv_running=YES`, `SAVE`.
+2. `nRF Connect`: device `TC-01`, company `0xFFFF`, magic `0x5443`.
+3. Short `017` to `GND` = one tip (red flash + `TICK`), ≈ +1 mm each.
+4. Power-cycle with batteries removed → value restored (after a save).
+
+## Power budget (estimate)
+
+Sleep ~4 µA (System ON + DC/DC) + `DRV5032` ~1 µA + one adv/5 s (~10 mA × 3 ms
+→ ~6 µA average) ≈ 12–15 µA total. A 3500 mAh L91 pair is limited by
+self-discharge, not by the load: 2–3+ years easily. VDD sampling (1/min)
+and flash saves (1/mm + daily) average to nanoamps.
+
+## Working with an AI agent
+
+This project is set up to be continued by an AI coding agent: the task history
+lives in git (`main` branch), the build is one command (`pio run`), flashing
+is drag-and-drop UF2, and verification is Serial log + `nRF Connect`.
+Board-specific traps that cost real debugging time (Feather pin map vs clone
+wiring, `Bluefruit.begin(1,0)` requirement, raw SAADC readings, UF2 family ID)
+are collected in **[AGENTS.md](AGENTS.md)** — read it before changing
+anything hardware-related.
