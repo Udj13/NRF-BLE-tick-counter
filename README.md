@@ -25,8 +25,10 @@ Firmware: PlatformIO + Arduino (Adafruit nRF52 core, target
   Tune the set screw for exactly 8.22 ml/tip to get 1.00 mm/tip;
   re-calibrate with a syringe by editing `TIP_VOLUME_ML_*`.
 - BLE advertising every 5 s: flags + manufacturer data
-  (company `0xFFFF`, magic `0x5443`, rain u32 LE in **whole mm**,
-  battery mV u16 LE, flags) + name `"TC-01"`. See packet section below.
+  (company `0xFFFF`, magic `0x5443`, rain total u32 LE in **whole mm**,
+  battery mV u16 LE, **last-24h rain u8**, flags) + name `"TC-01"`.
+  The 24 h window is a 256-stamp RAM ring (reboot resets the window only;
+  totals survive in flash). See packet section below.
 - Persistence: RAM + LittleFS `/tickcount.bin` (magic+CRC). Saves every 1 mm
   (`SAVE_STEP_UNITS=1`), every 24 h heartbeat, urgently on low battery.
   u32 wrap-around keeps counting.
@@ -75,28 +77,29 @@ BAT / B+ / B- pads — leave EMPTY
 
 Type: **non-connectable, non-scannable** (`ADV_NONCONN_IND`) — broadcast only,
 cannot connect. Interval **5 s** (`8000 × 0.625 ms`), Tx **0 dBm**,
-name **`TC-01`**. 24 of 31 bytes used.
+name **`TC-01`**. 25 of 31 bytes used.
 
 AD structures as seen by a scanner:
 
 | # | Field | Bytes (hex) | Meaning |
 |---|-------|-------------|---------|
 | 1 | Flags | `02 01 06` | len=2, type `0x01`, `0x06` = LE General Discoverable, BR/EDR not supported |
-| 2 | Manufacturer Specific | `0C FF FF FF 43 54 01 00 00 00 FD 0C 04` | len=12, type `0xFF`, then 11-byte MFG payload (below) |
+| 2 | Manufacturer Specific | `0D FF FF FF 43 54 01 00 00 00 FD 0C 01 04` | len=13, type `0xFF`, then 12-byte MFG payload (below) |
 | 3 | Complete Local Name | `06 09 54 43 2D 30 31` | len=6, type `0x09`, `"TC-01"` ASCII |
 
-MFG payload, 11 bytes, **little-endian**:
+MFG payload, 12 bytes, **little-endian**:
 
 | Offset | Len | Field | Format | Example |
 |--------|-----|-------|--------|---------|
 | 0 | 2 | Company ID | u16 LE, test value `0xFFFF` | `FF FF` |
 | 2 | 2 | Magic `"TC"` | `0x5443`, "this is our packet" marker | `43 54` |
-| 4 | 4 | Rainfall | u32 LE, **whole mm**, rounds down | `01 00 00 00` = 1 mm |
+| 4 | 4 | Rainfall total | u32 LE, **whole mm**, rounds down | `01 00 00 00` = 1 mm |
 | 8 | 2 | Supply | u16 LE, **millivolts** of VDD | `FD 0C` = 3325 mV |
-| 10 | 1 | Flags | bit0 batt warn, bit1 batt urgent, bit2 reed mode | `04` = reed mode |
+| 10 | 1 | Last 24 h | u8, mm in the trailing 24 h window (max 255) | `01` = 1 mm |
+| 11 | 1 | Flags | bit0 batt warn, bit1 batt urgent, bit2 reed mode | `04` = reed mode |
 
 Full example (1 tip after reboot, USB power, reed mode):
-`02 01 06 0C FF FF FF 43 54 01 00 00 00 FD 0C 04 06 09 54 43 2D 30 31`
+`02 01 06 0D FF FF FF 43 54 01 00 00 00 FD 0C 01 04 06 09 54 43 2D 30 31`
 
 Notes:
 - Company `0xFFFF` is reserved by Bluetooth SIG for testing. Get your own
@@ -113,18 +116,67 @@ import struct
 
 def parse_tc(manufacturer_data: dict) -> dict | None:
     payload = manufacturer_data.get(0xFFFF)
-    if not payload or len(payload) < 9:
+    if not payload or len(payload) < 10:
         return None
     if payload[0:2] != b'\x43\x54':  # magic "TC"
         return None
-    rain_mm, batt_mv, flags = struct.unpack('<IHB', bytes(payload[2:9]))
+    rain_mm, batt_mv, rain24_mm, flags = struct.unpack('<IHBB', bytes(payload[2:10]))
     return {
         'rain_mm': rain_mm,
+        'rain24_mm': rain24_mm,
         'batt_v': batt_mv / 1000.0,
         'low_warn': bool(flags & 0x01),
         'low_urgent': bool(flags & 0x02),
         'reed_mode': bool(flags & 0x04),
     }
+```
+
+Same in C — walks raw advertising bytes (AD structures), no BLE-stack
+dependency, endianness handled explicitly (works on big-endian hosts too):
+
+```c
+#include <stdint.h>
+#include <string.h>
+
+#define TC_COMPANY_ID 0xFFFFu
+#define TC_MAGIC      0x5443u   /* "TC", little-endian on air */
+
+typedef struct {
+    uint32_t rain_mm;    /* total rainfall, whole mm */
+    uint16_t batt_mv;    /* supply voltage, millivolts */
+    uint8_t  rain24_mm;  /* trailing 24 h window, mm (max 255) */
+    uint8_t  flags;      /* bit0 batt warn, bit1 batt urgent, bit2 reed mode */
+} tc_data_t;
+
+/* adv: full advertising packet bytes, adv_len: its length.
+ * Returns 0 on success (out filled), -1 if not our packet. */
+int tc_parse_adv(const uint8_t *adv, uint8_t adv_len, tc_data_t *out)
+{
+    uint8_t i = 0;
+    while (i < adv_len) {
+        uint8_t len = adv[i];              /* len covers type + data */
+        if (len == 0 || i + len >= adv_len)
+            break;                         /* malformed */
+        uint8_t type = adv[i + 1];
+        /* Manufacturer Specific (0xFF), company 0xFFFF, 10 payload bytes */
+        if (type == 0xFF && len >= 1 + 2 + 10 &&
+            adv[i + 2] == (TC_COMPANY_ID & 0xFF) &&
+            adv[i + 3] == (TC_COMPANY_ID >> 8)) {
+            const uint8_t *p = &adv[i + 4]; /* magic at p[0..1] */
+            uint16_t magic = (uint16_t)p[0] | ((uint16_t)p[1] << 8);
+            if (magic != TC_MAGIC)
+                return -1;
+            out->rain_mm  = (uint32_t)p[2]        | ((uint32_t)p[3] << 8) |
+                            ((uint32_t)p[4] << 16) | ((uint32_t)p[5] << 24);
+            out->batt_mv  = (uint16_t)p[6] | ((uint16_t)p[7] << 8);
+            out->rain24_mm = p[8];
+            out->flags    = p[9];
+            return 0;
+        }
+        i += (uint8_t)(len + 1);           /* step over len byte + record */
+    }
+    return -1;
+}
 ```
 
 ## Configuration (`include/config.h`)
@@ -136,6 +188,7 @@ def parse_tc(manufacturer_data: dict) -> dict | None:
 | `CATCHMENT_AREA_MM2` | funnel effective area | 8220 |
 | `TIP_VOLUME_ML_NUM/DEN` | tip volume, ml | 865/100 |
 | `SAVE_STEP_UNITS` | flash save every N mm | 1 |
+| `TIP_RING_SIZE` | 24 h window ring size (stamps) | 256 |
 | `ADV_TX_POWER_DBM` | BLE TX power | 0 |
 | `BAT_WARN_MV / BAT_URGENT_MV` | battery thresholds (mV, rail) | 2400/2200 |
 | `PIN_LED_ADV / PIN_LED_TICK` | red LED (P0.15) | 24/24 |

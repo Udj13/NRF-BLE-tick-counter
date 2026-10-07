@@ -40,6 +40,13 @@
 typedef uint32_t raw_t;
 typedef uint32_t scaled_t;
 
+// ============ Окно «последние 24 часа» ============
+// Кольцевой буфер меток тиков только в RAM (перезагрузки не переживает —
+// и не надо: тотал жив во Flash). 50-60 типов/сутки, больше 255 мм/сутки
+// в принципе не бывает (катаклизм), поэтому в пакете под rain24 — 1 байт.
+#define TIP_RING_SIZE 256          // меток в кольце (256 x 4 Б = 1 КБ RAM)
+#define RAIN24_WINDOW_MS 86400000UL // 24 ч в мс
+
 // ============ BLE Advertising ============
 // Non-connectable, только рассылка. Интервал 5 сек = 8000 * 0.625 мс
 #define ADV_INTERVAL_625US 8000
@@ -49,8 +56,9 @@ typedef uint32_t scaled_t;
 #define MFG_MAGIC 0x5443   // "TC" tick-counter
 
 // Формат MFG payload (little-endian):
-// [0..1] company 0xFFFF | [2..3] magic 0x5443 | [4..7] rain u32, целые мм | [8..9] batt_mV u16 | [10] flags
-#define MFG_PAYLOAD_LEN 11
+// [0..1] company 0xFFFF | [2..3] magic 0x5443 | [4..7] rain u32, целые мм
+// | [8..9] batt_mV u16 | [10] rain24 u8, мм за последние 24 ч (max 255) | [11] flags
+#define MFG_PAYLOAD_LEN 12
 #define FLAG_LOW_BATT_WARN (1u << 0)
 #define FLAG_LOW_BATT_URGENT (1u << 1)
 #define FLAG_REED_MODE (1u << 2)

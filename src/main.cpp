@@ -8,6 +8,12 @@
 static volatile raw_t g_rawTicks = 0;
 static volatile uint32_t g_lastIsrMs = 0;
 static volatile bool g_tickEvent = false; // флаг для мигания красным в loop (в ISR только флаг)
+// Кольцо меток тиков (millis) для окна «последние 24 ч». Только RAM.
+// g_bootTips считает тики с момента включения (не персистится): сколько
+// слотов кольца заполнено = min(g_bootTips, TIP_RING_SIZE).
+static volatile uint32_t g_tipTs[TIP_RING_SIZE];
+static volatile uint16_t g_tipIdx = 0;
+static volatile uint32_t g_bootTips = 0;
 static scaled_t g_lastSavedScaled = 0;
 static uint32_t g_lastAdvMs = 0;
 static uint32_t g_lastSaveMs = 0;
@@ -93,10 +99,25 @@ void onPulse() {
   g_lastIsrMs = now;
   g_rawTicks++; // wrap uint32 — ок, считаем дальше
   g_tickEvent = true;
+  g_tipTs[g_tipIdx] = now; // метка для окна 24 ч
+  if (++g_tipIdx >= TIP_RING_SIZE) g_tipIdx = 0;
+  g_bootTips++;
+}
+
+// Сколько мм выпало за последние 24 ч (скользящее окно, 0..255)
+static uint8_t rain24mm(uint32_t now) {
+  uint32_t valid = g_bootTips < TIP_RING_SIZE ? (uint32_t)g_bootTips : (uint32_t)TIP_RING_SIZE;
+  uint32_t cnt = 0;
+  for (uint32_t i = 0; i < valid; i++) {
+    if ((now - g_tipTs[i]) < RAIN24_WINDOW_MS) cnt++;
+  }
+  scaled_t mm = toScaled((raw_t)cnt);
+  if (mm > 255) mm = 255; // катаклизм — кламп
+  return (uint8_t)mm;
 }
 
 // ---------- BLE adv payload ----------
-static void buildMfgPayload(uint8_t *buf, scaled_t scaled, uint16_t battMv, uint8_t flags) {
+static void buildMfgPayload(uint8_t *buf, scaled_t scaled, uint16_t battMv, uint8_t rain24, uint8_t flags) {
   buf[0] = (uint8_t)(COMPANY_ID & 0xFF);
   buf[1] = (uint8_t)((COMPANY_ID >> 8) & 0xFF);
   buf[2] = (uint8_t)(MFG_MAGIC & 0xFF);
@@ -107,13 +128,15 @@ static void buildMfgPayload(uint8_t *buf, scaled_t scaled, uint16_t battMv, uint
   buf[7] = (uint8_t)((scaled >> 24) & 0xFF);
   buf[8] = (uint8_t)(battMv & 0xFF);
   buf[9] = (uint8_t)((battMv >> 8) & 0xFF);
-  buf[10] = flags;
+  buf[10] = rain24;
+  buf[11] = flags;
 }
 
 static void advUpdate() {
   scaled_t scaled = toScaled((raw_t)g_rawTicks);
+  uint8_t r24 = rain24mm(millis());
   uint8_t payload[MFG_PAYLOAD_LEN];
-  buildMfgPayload(payload, scaled, g_battMv, g_flags);
+  buildMfgPayload(payload, scaled, g_battMv, r24, g_flags);
 
   Bluefruit.Advertising.stop();
   Bluefruit.Advertising.clearData();
@@ -136,6 +159,8 @@ static void advUpdate() {
   if (Serial) {
     Serial.print("ADV scaled=");
     Serial.print(scaled);
+    Serial.print("mm rain24=");
+    Serial.print(r24);
     Serial.print("mm raw=");
     Serial.print((uint32_t)g_rawTicks);
     Serial.print(" batt=");
