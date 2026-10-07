@@ -76,7 +76,15 @@ static inline uint32_t debounceMs() {
 #endif
 }
 
-static inline scaled_t toScaled(raw_t raw) { return (scaled_t)(raw / TICKS_PER_UNIT); }
+static inline scaled_t toScaled(raw_t raw) {
+  // Осадки в ЦЕЛЫХ мм (округление вниз):
+  // rain_mm = raw * TIP_ML / (CATCH_MM2/1000) = raw * TIP_NUM*1000 / (TIP_DEN*CATCH_MM2).
+  // 1 тип: 1*865*1000/(100*8220) = 865000/822000 = 1. Считаем в 64 битах.
+  uint64_t v = (uint64_t)raw * (uint64_t)TIP_VOLUME_ML_NUM * 1000ULL;
+  v /= (uint64_t)TIP_VOLUME_ML_DEN * (uint64_t)CATCHMENT_AREA_MM2;
+  if (v > 0xFFFFFFFFULL) v = 0xFFFFFFFFULL; // wrap дальше обработает вызывающий
+  return (scaled_t)v;
+}
 
 void onPulse() {
   uint32_t now = millis();
@@ -128,7 +136,7 @@ static void advUpdate() {
   if (Serial) {
     Serial.print("ADV scaled=");
     Serial.print(scaled);
-    Serial.print(" raw=");
+    Serial.print("mm raw=");
     Serial.print((uint32_t)g_rawTicks);
     Serial.print(" batt=");
     Serial.print(g_battMv);
@@ -210,12 +218,18 @@ void setup() {
     Serial.print("restored raw=");
     Serial.print((uint32_t)g_rawTicks);
     Serial.print(" savedScaled=");
-    Serial.println(g_lastSavedScaled);
+    Serial.print(g_lastSavedScaled);
+    Serial.println("mm");
     Serial.print("VDD=");
     Serial.print(g_battMv);
     Serial.println("mV");
-    Serial.print("TICKS_PER_UNIT=");
-    Serial.println(TICKS_PER_UNIT);
+    Serial.print("CALIB: tip=");
+    Serial.print(TIP_VOLUME_ML_NUM);
+    Serial.print('/');
+    Serial.print(TIP_VOLUME_ML_DEN);
+    Serial.print("ml catchment=");
+    Serial.print(CATCHMENT_AREA_MM2);
+    Serial.println("mm2");
   }
 
   advUpdate();
@@ -254,7 +268,7 @@ void loop() {
     if (persistSave((raw_t)g_rawTicks, sc)) {
       g_lastSavedScaled = sc;
       g_lastSaveMs = now;
-      if (Serial) { Serial.print("SAVE scaled="); Serial.println(sc); }
+      if (Serial) { Serial.print("SAVE scaled="); Serial.print(sc); Serial.println("mm"); }
     } else if (Serial) {
       Serial.println("SAVE FAILED");
     }

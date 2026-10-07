@@ -19,11 +19,20 @@
 #define VCC_CUT_PIN 13
 #define ENABLE_VCC_CUT 0 // выкл: карта пинов Feather, P0.13 там = SPI MOSI, не трогаем
 
-// ============ Счет и коэффициент ============
-// 50 тиков = 1 литр, либо 200 тиков = 1 км. Меняется при сборке.
-#define TICKS_PER_UNIT 50UL
-// Сохранять во Flash при приросте scaled на SAVE_STEP единиц (напр. каждые 10 литров)
-#define SAVE_STEP_UNITS 10UL
+// ============ Калибровка осадкомера (tipping bucket) ============
+// Водосбор: 66.6 x 129 мм = 8591.4 мм² минус 4 скругления r=20.8
+// (4r² - πr² = 371.39) => эффективная площадь 8220 мм².
+// 1 мм осадков на 8220 мм² = 8.22 мл.
+// Объем опрокидывания: 500 мл / 57.8 типов = 8.65 мл.
+// => 1 тип = 8.65 / 8.22 = 1.0523 мм.
+// Подстройка винтом под ровно 8.22 мл/тип даст 1.00 мм/тип.
+// Перекалибровка шприцем — правим только TIP_VOLUME_ML_*.
+// scaled в эфире и во flash — ЦЕЛЫЕ мм (округление вниз): 1 тип = 1 мм.
+#define CATCHMENT_AREA_MM2 8220UL
+#define TIP_VOLUME_ML_NUM 865UL   // 8.65 мл
+#define TIP_VOLUME_ML_DEN 100UL
+// Сохранять во Flash при приросте scaled на SAVE_STEP_UNITS мм (1 = каждый мм)
+#define SAVE_STEP_UNITS 1UL
 // + принудительный heartbeat-save раз в сутки
 #define SAVE_HEARTBEAT_MS (24UL * 3600UL * 1000UL)
 
@@ -40,7 +49,7 @@ typedef uint32_t scaled_t;
 #define MFG_MAGIC 0x5443   // "TC" tick-counter
 
 // Формат MFG payload (little-endian):
-// [0..1] company 0xFFFF | [2..3] magic 0x5443 | [4..7] scaled u32 | [8..9] batt_mV u16 | [10] flags
+// [0..1] company 0xFFFF | [2..3] magic 0x5443 | [4..7] rain u32, целые мм | [8..9] batt_mV u16 | [10] flags
 #define MFG_PAYLOAD_LEN 11
 #define FLAG_LOW_BATT_WARN (1u << 0)
 #define FLAG_LOW_BATT_URGENT (1u << 1)
