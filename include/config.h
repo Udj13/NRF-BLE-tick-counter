@@ -11,7 +11,7 @@
 #define SENSOR_ACTIVE_LOW 1
 
 // Тип датчика для антидребезга: 0 = холл DRV5032 (чистый), 1 = геркон (дребезг)
-#define SENSOR_IS_REED 0
+#define SENSOR_IS_REED 1
 #define DEBOUNCE_MS_REED 40
 #define DEBOUNCE_MS_HALL 5
 
@@ -64,22 +64,22 @@ typedef uint32_t scaled_t;
 #define BAT_MEASURE_EVERY_ADV 12 // мерить VDD раз в 12 adv = раз в минуту
 
 // ============ Светодиод ============
-// Клон разведен как nRF Pro Micro / Nice!Nano, а карта пинов у нас Feather,
-// поэтому родные LED_BLUE/LED_RED ядра бьют мимо.
-// Факт по этому классу плат (Zephyr promicro_nrf52840, ArduinoNRF):
-//   - синий = P1.10 = Arduino 4 (на части клонов P0.15, проверим)
-//   - второй LED = P0.15 = Arduino 24 (кандидат на красный)
-// Плюс Bluefruit52 по умолчанию сам мигает CONN-светодиодом при advertising
-// (те самые 2 раза в секунду) — отключаем autoConnLed и рулим сами.
-// Синий — вспышка в момент advertising, красный — вспышка на тик.
-// Если цвета перепутаны или полярность инверсная — сказать, поменяю.
+// По документации этого класса плат (SuperMini/nRF Pro Micro, wiki joric/nrfmicro):
+// на свежих ревизиях красный и синий ПЕРЕПУТАНЫ относительно оригинала:
+//   - КРАСНЫЙ = индикатор Bluetooth, GPIO P0.15 = Arduino 24 (проверено: мигает);
+//   - СИНИЙ = индикатор зарядки (выход STAT зарядника LTH7R), ЖЕЛЕЗО, не GPIO.
+// Синий мигает 2 Гц потому что на пинах BAT нет аккумулятора — зарядник
+// периодически «щупает» батарею. Софтом он не управляется вообще
+// (наш autoConnLed и PIN 4 дергали дырку в воздухе).
+// Поэтому вся индикация — на красном: вспышка на тик + вспышка на adv.
+// На батарейках (без USB) зарядник обесточен и синий погашен сам.
 #define LED_BLINK_ON_ADV 1
 #define RED_BLINK_ON_TICK 1
-#define PIN_LED_ADV 4   // P1.10
-#define PIN_LED_TICK 24 // P0.15
-#define LED_ON HIGH
+#define PIN_LED_ADV 24  // P0.15, красный
+#define PIN_LED_TICK 24 // P0.15, красный
+#define LED_ON HIGH     // active-high, проверено
 #define LED_OFF LOW
-#define ADV_BLINK_MS 50
+#define ADV_BLINK_MS 80   // adv-вспышка длиннее, чтобы отличать от тика
 #define TICK_BLINK_MS 30
 
 // ============ Отладка ============
