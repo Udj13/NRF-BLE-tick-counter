@@ -180,6 +180,14 @@ int tc_parse_adv(const uint8_t *adv, uint8_t adv_len, tc_data_t *out)
 }
 ```
 
+Navtelecom GPS trackers
+<img width="1245" height="647" alt="image" src="https://github.com/user-attachments/assets/c62a172b-86c9-4c4a-a57e-fe6300197f68" />
+
+<img width="1057" height="353" alt="image" src="https://github.com/user-attachments/assets/d27f1d64-51f5-48a3-b96c-4586158520eb" />
+
+
+
+
 ## Configuration (`include/config.h`)
 
 | Define | Meaning | Default |
